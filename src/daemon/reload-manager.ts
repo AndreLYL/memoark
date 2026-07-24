@@ -1,4 +1,5 @@
 import type { Config, LoadedConfig } from "../core/config.js";
+import { effectiveSchedulerConfig } from "./effective-scheduler.js";
 import type { ServeRuntime, ServeRuntimeHolder } from "./serve-runtime.js";
 
 /**
@@ -88,9 +89,18 @@ export class ReloadManager {
 
     const prevSig = runtimeSignature(this.lastConfig);
     const nextSig = runtimeSignature(config);
-    if (prevSig === nextSig) {
-      // Tier 1: scheduling-only change
-      if (config.scheduler) this.deps.holder.current.scheduler?.reconcile(config.scheduler);
+    // A scheduler.enabled flip must rebuild (Tier 2): a runtime built with the
+    // scheduler disabled has no runSource wired, and reconcile() never starts or
+    // stops the tick loop — so a Tier-1 reconcile would leave the Auto-fetch
+    // toggle without effect until the process restarts.
+    const schedulerFlipped =
+      (this.lastConfig.scheduler?.enabled ?? false) !== (config.scheduler?.enabled ?? false);
+    if (prevSig === nextSig && !schedulerFlipped) {
+      // Tier 1: scheduling-only change. Reconcile with the EFFECTIVE config —
+      // the raw block's `sources` map holds only overrides (empty on a fresh
+      // install), and reconciling with it would delete every derived schedule.
+      const scheduler = effectiveSchedulerConfig(config);
+      if (scheduler) this.deps.holder.current.scheduler?.reconcile(scheduler);
     } else {
       // Tier 2: build FIRST (failure leaves old untouched), then drain old → swap → start new → dispose old.
       const next = await this.deps.buildRuntime(config); // throws → old runtime untouched, error bubbles

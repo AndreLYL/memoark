@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Home installs no longer nest state at `~/.memkin/.memkin/`**: `ensureStateDir`/`statePath`
+  appended `.memkin` even when the config root already IS `~/.memkin` (the standard home
+  install), splitting scheduler state away from `daemon.json`. Worse, the daemon's
+  dedup/cursor/redaction-map checkpoints defaulted to `process.cwd()` instead of the config
+  root, so a daemon launched with `cwd=/` or `cwd=$HOME` scattered state across up to three
+  places. State now resolves through one helper (`stateDirFor`), the serve runtime builds its
+  pipeline config via the same factory as `memkin extract`, `memkin docs sync` anchors to the
+  config root, and `doctor` checks the corrected path (it used to recompute the nested path
+  and bless the bug). On startup, files left in a pre-fix `~/.memkin/.memkin/` are migrated up
+  (never overwriting newer files) so existing installs keep scheduler backoff and dedup/cursor
+  checkpoints.
+- **`memkin status` no longer shows a permanent "⚠ Serving subset changed" false positive**:
+  `up` stored the serving-subset hash with a hardcoded `readOnly: false` while `status`
+  recomputed it from bare config (`mcp.http.read_only: true` in the default config), so the
+  hashes could never converge no matter how often `memkin up` ran. Both sides now derive the
+  hash from one helper (`resolveDaemonLaunchRuntime`) that models the daemon exactly as `up`
+  launches it (loopback bind, read-write). Stored hashes from older versions match the new
+  recompute for default configs, so the warning clears without re-running `up`.
+- **`serve` now actually auto-captures the enabled channels after a fresh install**: the
+  scheduler treated `scheduler.sources` as the authoritative list of what to run, but every
+  config writer (web setup wizard, Auto-fetch settings, CLI `init`) persists that map as
+  overrides only — a fresh install saved `{}` (or no scheduler block at all), so the scheduler
+  started with zero schedules and never extracted anything. The schedulable set is now derived
+  from the enabled data channels (`claude-code`/`codex`/`hermes`, `feishu`, `feishu.docs`),
+  with `scheduler.sources` entries kept as per-source overrides (`interval_secs`,
+  `enabled: false`). Note for hand-written configs: a `scheduler.sources` map that lists only
+  some channels no longer disables the rest — set `enabled: false` per source (or disable the
+  channel) to opt out.
+- **Toggling Auto-fetch in the running app now takes effect immediately**: a
+  `scheduler.enabled` flip forces a runtime rebuild on config reload, so turning it on wires
+  and starts the capture loop (and turning it off stops it) without restarting the daemon.
+- **CLI `memkin init` now writes the same default scheduler block as the web wizard**
+  (auto-fetch on, hourly interval), so CLI-initialized installs auto-capture too.
+
 ## [0.4.2] - 2026-07-07
 
 ### Fixed

@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import type { Config } from "../../core/config.js";
 import { Database } from "../database.js";
+import { checkManagedHostSupport, type HostSupport } from "./host-support.js";
 import { withManagedLock } from "./managed-lock.js";
 import { managedConnUrl, managedPaths } from "./pg-paths.js";
 import type { PgRuntimeProvider, RuntimePaths } from "./pg-runtime-provider.js";
@@ -19,6 +20,8 @@ export interface ProvisionDeps {
   home?: string;
   provider: PgRuntimeProvider;
   makeSupervisor: (rt: RuntimePaths, home: string) => ManagedSupervisor;
+  /** Override the host preflight (tests). Default: real checkManagedHostSupport. */
+  hostSupport?: () => HostSupport;
 }
 
 export interface ProvisionResult {
@@ -30,6 +33,18 @@ export async function provisionManaged(
   config: Config,
   deps: ProvisionDeps,
 ): Promise<ProvisionResult> {
+  // Preflight BEFORE any download/initdb so a host that provably can't run the
+  // runtime (root, old glibc, unsupported platform) gets one actionable error
+  // instead of a raw initdb/loader failure. "soft-no" (undeterminable glibc)
+  // proceeds: an explicitly configured engine is never blocked on uncertainty.
+  const support = (
+    deps.hostSupport ??
+    (() => checkManagedHostSupport({ platform: process.platform, arch: process.arch }))
+  )();
+  if (support.level === "hard-no") {
+    throw new Error(`managed Postgres preflight failed: ${support.reason}`);
+  }
+
   const home = deps.home ?? homedir();
   return withManagedLock(home, async () => {
     const rt = await deps.provider.ensure();

@@ -50,4 +50,18 @@ describe("validateDraft — Feishu credentials", () => {
     );
     expect(appIdError(diags)).toBeUndefined();
   });
+
+  it("rejects embedding dimensions above the pgvector HNSW limit", () => {
+    const diags = validateDraft({
+      llm: { provider: "anthropic", model: "claude" },
+      sources: { "claude-code": { enabled: true } },
+      embedding: { dimensions: 2001 },
+    });
+    expect(diags).toContainEqual({
+      path: "embedding.dimensions",
+      severity: "error",
+      message:
+        "Embedding dimensions cannot exceed 2000. pgvector HNSW indexes support at most 2000 dimensions. For OpenAI text-embedding-3-large, use 1536. Got: 2001.",
+    });
+  });
 });

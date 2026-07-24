@@ -40,7 +40,10 @@ describe("feishuNeedsBotCredentials", () => {
     "dm",
   ] as const)("is true when bot-scoped source %s is enabled", (src) => {
     expect(
-      feishuNeedsBotCredentials({ enabled: true, sources: { [src]: { enabled: true } } as never }),
+      feishuNeedsBotCredentials({
+        enabled: true,
+        sources: { [src]: { enabled: true } } as never,
+      }),
     ).toBe(true);
   });
 
@@ -85,5 +88,17 @@ describe("validateConfig — Feishu credentials", () => {
       }),
     );
     expect(result.valid).toBe(true);
+  });
+
+  it("rejects embedding dimensions above the pgvector HNSW limit", () => {
+    const result = validateConfig({
+      llm: { provider: "openai", model: "gpt-4o-mini" },
+      sources: { "claude-code": { enabled: true } },
+      embedding: { dimensions: 2001 },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain(
+      "Embedding dimensions cannot exceed 2000. pgvector HNSW indexes support at most 2000 dimensions. For OpenAI text-embedding-3-large, use 1536. Got: 2001.",
+    );
   });
 });

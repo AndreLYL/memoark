@@ -17,7 +17,7 @@ import { disableAutostart, enableAutostart } from "../daemon/autostart/index.js"
 import type { CommandRunner } from "../daemon/autostart/runner.js";
 import { nodeRunner } from "../daemon/autostart/runner.js";
 import { ADAPTERS, detectInstalledAgents, planInstall, runInstall } from "../install/index.js";
-import { resolveMcpHttpRuntime } from "../server/mcp-http-runtime.js";
+import { resolveDaemonLaunchRuntime } from "../server/mcp-http-runtime.js";
 import { provisionManagedForeground as realProvisionManagedForeground } from "../store/managed/managed-engine.js";
 import { managedPaths } from "../store/managed/pg-paths.js";
 import { createPgRuntimeProvider } from "../store/managed/pg-runtime-provider.js";
@@ -108,8 +108,10 @@ export async function runUp(
     // Step 4: plan
     const plan = planUp({ detectedAgents, missingEnvVars, engine });
 
-    // Step 5: resolve MCP HTTP runtime
-    const runtime = resolveMcpHttpRuntime(config.mcp.http, { mcpPort: opts.port });
+    // Step 5: resolve the runtime exactly as the daemon will be launched
+    // (loopback, read-write). `status` recomputes its hash from this same
+    // helper, so the two sides stay in agreement.
+    const runtime = resolveDaemonLaunchRuntime(config.mcp.http, { port: opts.port });
     const port = runtime.port;
     const url = `http://127.0.0.1:${port}/mcp`;
 
@@ -125,7 +127,7 @@ export async function runUp(
       "--config",
       configPath,
       "--mcp-bind",
-      "127.0.0.1",
+      runtime.bind,
       "--mcp-port",
       String(port),
       "--mcp-read-write",
@@ -144,9 +146,9 @@ export async function runUp(
       config_path: configPath,
       raw_yaml_hash: rawYamlHash(configPath),
       serving_subset_hash: servingSubsetHash({
-        bind: "127.0.0.1",
+        bind: runtime.bind,
         port,
-        readOnly: false,
+        readOnly: runtime.readOnly,
         hosts: runtime.allowedHosts,
       }),
       url,

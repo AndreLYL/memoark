@@ -84,6 +84,9 @@ describe("init wizard", () => {
     const yaml = readFileSync("memkin.yaml", "utf-8");
     expect(yaml).toContain(`api_key: ${OPENAI_API_KEY_PLACEHOLDER}`);
     expect(yaml).toContain("claude-code:");
+    // Fresh installs enable auto-fetch (web-wizard parity) so `serve` schedules
+    // the enabled channels without any manual scheduler config.
+    expect(yaml).toMatch(/scheduler:\n {2}enabled: true/);
     expect(output.text()).toContain("[ok] Configuration saved");
   });
 
@@ -112,6 +115,7 @@ describe("init wizard", () => {
     expect(yaml).toContain("provider: openai");
     expect(yaml).toContain("model: gpt-4o-mini");
     expect(yaml).toContain(`api_key: ${OPENAI_API_KEY_PLACEHOLDER}`);
+    expect(yaml).toMatch(/scheduler:\n {2}enabled: true/);
     expect(output.text()).toContain("Welcome to Memkin Setup");
   });
 

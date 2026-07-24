@@ -12,6 +12,7 @@ import type {
   SourceConfig,
   StoreConfig,
 } from "../core/config.js";
+import { validateEmbeddingDimensions } from "../core/embedding-dimensions.js";
 
 export interface PartialSourcesConfig {
   "claude-code"?: Partial<SourceConfig>;
@@ -110,6 +111,11 @@ export function validateConfig(config: PartialConfig): ValidationResult {
     if (isPublicBindHost(mcpHttp.bind_host) && !mcpHttp.auth_token_env) {
       errors.push("MCP HTTP public bind requires auth_token_env");
     }
+  }
+
+  const embeddingDimensionsError = validateEmbeddingDimensions(config.embedding?.dimensions);
+  if (embeddingDimensionsError) {
+    errors.push(embeddingDimensionsError);
   }
 
   return {

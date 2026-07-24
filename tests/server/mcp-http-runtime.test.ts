@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { assertLoopbackOrThrow, resolveMcpHttpRuntime } from "../../src/server/mcp-http-runtime.js";
+import { servingSubsetHash } from "../../src/daemon/autostart/daemon-state.js";
+import {
+  assertLoopbackOrThrow,
+  resolveDaemonLaunchRuntime,
+  resolveMcpHttpRuntime,
+} from "../../src/server/mcp-http-runtime.js";
 
 const cfg = {
   bind_host: "127.0.0.1",
@@ -34,6 +39,47 @@ describe("resolveMcpHttpRuntime", () => {
     expect(r.port).toBe(3928);
     expect(r.readOnly).toBe(true);
     expect(r.allowedHosts).toEqual(["127.0.0.1:3928"]);
+  });
+});
+
+describe("resolveDaemonLaunchRuntime", () => {
+  it("forces loopback + read-write regardless of YAML (cfg has read_only: true)", () => {
+    const r = resolveDaemonLaunchRuntime({ ...cfg, bind_host: "localhost", read_only: true });
+    expect(r.bind).toBe("127.0.0.1");
+    expect(r.readOnly).toBe(false);
+    expect(r.port).toBe(3928);
+    expect(r.allowedHosts).toEqual(["127.0.0.1:3928"]);
+  });
+
+  it("port override regenerates hosts like `up --port` does", () => {
+    const r = resolveDaemonLaunchRuntime(cfg, { port: 4000 });
+    expect(r.port).toBe(4000);
+    expect(r.allowedHosts).toEqual(["127.0.0.1:4000", "localhost:4000"]);
+  });
+
+  it("up-stored hash and status-recomputed hash agree for the default config (regression)", () => {
+    // The default wizard config has read_only: true. `up` stores the hash of the
+    // launch runtime; `status` must recompute through the SAME helper. Recomputing
+    // from bare config used readOnly=true and mismatched forever.
+    const subsetOf = (r: ReturnType<typeof resolveDaemonLaunchRuntime>) => ({
+      bind: r.bind,
+      port: r.port,
+      readOnly: r.readOnly,
+      hosts: r.allowedHosts,
+    });
+    const storedByUp = servingSubsetHash(subsetOf(resolveDaemonLaunchRuntime(cfg, {})));
+    const recomputedByStatus = servingSubsetHash(subsetOf(resolveDaemonLaunchRuntime(cfg)));
+    expect(recomputedByStatus).toBe(storedByUp);
+
+    // And the bare-config derivation (the old status behavior) really would mismatch:
+    const bare = resolveMcpHttpRuntime(cfg, {});
+    const oldStatusHash = servingSubsetHash({
+      bind: bare.bind,
+      port: bare.port,
+      readOnly: bare.readOnly,
+      hosts: bare.allowedHosts,
+    });
+    expect(oldStatusHash).not.toBe(storedByUp);
   });
 });
 

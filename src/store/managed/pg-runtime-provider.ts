@@ -80,6 +80,15 @@ export const RUNTIME_MANIFEST = {
 /** Platform/arch combinations the managed runtime ships a prebuilt tarball for. */
 export type SupportedAssetKey = keyof typeof RUNTIME_MANIFEST.assets;
 
+/**
+ * Minimum glibc the published linux tarballs require — the highest versioned
+ * GLIBC_* symbol measured in the release binaries (postgres/psql/vector.so all
+ * reference GLIBC_2.38, picked up from the ubuntu-24.04 build runner).
+ * Update TOGETHER with the manifest shas when republishing the runtime:
+ * building on ubuntu-22.04 lowers this to "2.35".
+ */
+export const LINUX_MIN_GLIBC = "2.38";
+
 const SUPPORTED_PLATFORMS: ReadonlySet<NodeJS.Platform> = new Set(["darwin", "linux"]);
 const SUPPORTED_ARCHES: ReadonlySet<NodeJS.Architecture> = new Set(["arm64", "x64"]);
 

@@ -173,6 +173,73 @@ describe("ReloadManager", () => {
       expect(events).toEqual(["build", "drain-start", "drain-end", "start-new", "dispose-old"]);
     });
 
+    it("Tier 1 reconciles with the EFFECTIVE scheduler config (derived sources, not the raw map)", async () => {
+      let received: { sources?: Record<string, unknown> } | undefined;
+      const holder = new ServeRuntimeHolder({
+        ...makeRuntime(() => {}, "init"),
+        scheduler: {
+          reconcile: (c: { sources?: Record<string, unknown> }) => {
+            received = c;
+          },
+          drain: async () => {},
+          start: async () => {},
+        } as never,
+      });
+      const mgr = new ReloadManager({
+        holder,
+        currentConfig: () => sameSigConfig,
+        buildRuntime: async () => makeRuntime(() => {}, "rebuilt"),
+      });
+      await mgr.run(sameSigConfig2);
+      // Raw block lists only feishu; the effective map must add the derived
+      // agent channels — reconciling with the raw map would delete their schedules.
+      expect(Object.keys(received?.sources ?? {}).sort()).toEqual([
+        "claude-code",
+        "codex",
+        "feishu",
+        "hermes",
+      ]);
+      expect(received?.sources?.feishu).toEqual({ interval_secs: 300 });
+    });
+
+    it("scheduler.enabled flip forces Tier 2 (rebuild), not a reconcile", async () => {
+      let reconciled = 0;
+      let rebuilds = 0;
+      let startedNew = 0;
+      const holder = new ServeRuntimeHolder(makeRuntime(() => reconciled++, "init"));
+      const disabledConfig = {
+        ...(baseSigConfig as Record<string, unknown>),
+        scheduler: {
+          enabled: false,
+          tick_interval_secs: 60,
+          defaults: { interval_secs: 3600 },
+          sources: {},
+        },
+      } as never;
+      const mgr = new ReloadManager({
+        holder,
+        currentConfig: () => disabledConfig,
+        buildRuntime: async () => {
+          rebuilds++;
+          return {
+            ...makeRuntime(() => {}, "new"),
+            scheduler: {
+              reconcile: () => {},
+              drain: async () => {},
+              start: async () => {
+                startedNew++;
+              },
+            } as never,
+          };
+        },
+      });
+      // Same runtime signature, only scheduler.enabled flips false → true.
+      await mgr.run(baseSigConfig);
+      expect(reconciled).toBe(0);
+      expect(rebuilds).toBe(1);
+      expect(startedNew).toBe(1); // rebuilt runtime is started because enabled=true
+    });
+
     it("Tier 2 build failure leaves old runtime untouched", async () => {
       let oldDrained = false;
       const holder = new ServeRuntimeHolder({

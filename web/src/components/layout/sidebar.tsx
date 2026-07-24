@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { LayoutDashboard, Clock, Download, Share2, Layers, Search } from "lucide-react";
 import { api } from "../../api/client";
 
-const NAV_ITEMS = [
+export const SIDEBAR_NAV_ITEMS = [
   { to: "/", label: "Dashboard", Icon: LayoutDashboard },
   { to: "/timeline", label: "Timeline", Icon: Clock },
   { to: "/fetch", label: "Fetch", Icon: Download },
@@ -12,6 +12,8 @@ const NAV_ITEMS = [
   { to: "/entities", label: "All Entities", Icon: Layers },
   { to: "/search", label: "Search", Icon: Search },
 ];
+
+export const SIDEBAR_FOOTER_ITEMS = [{ to: "/config", label: "Settings", icon: "⚙" }] as const;
 
 const CATEGORIES = [
   { label: "People", type: "person", color: "var(--color-person)" },
@@ -26,6 +28,14 @@ function navLinkClass({ isActive }: { isActive: boolean }) {
     isActive
       ? "bg-accent-muted/20 text-accent"
       : "text-fg-muted hover:text-fg-default hover:bg-bg-overlay"
+  }`;
+}
+
+function footerNavLinkClass({ isActive }: { isActive: boolean }) {
+  return `flex w-full items-center gap-2 px-3 py-1.5 text-sm rounded-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
+    isActive
+      ? "bg-accent-muted/20 text-accent"
+      : "text-fg-subtle hover:text-fg-default hover:bg-bg-overlay"
   }`;
 }
 
@@ -60,7 +70,7 @@ export function Sidebar() {
       </div>
 
       <div className="px-2 space-y-0.5">
-        {NAV_ITEMS.map((item) => (
+        {SIDEBAR_NAV_ITEMS.map((item) => (
           <NavLink key={item.to} to={item.to} end={item.to === "/"} className={navLinkClass}>
             <item.Icon size={16} strokeWidth={1.75} />
             <span>{item.label}</span>
@@ -121,13 +131,12 @@ export function Sidebar() {
           <span>{isDark ? "☀" : "☾"}</span>
           <span>{isDark ? "Light mode" : "Dark mode"}</span>
         </button>
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-fg-subtle hover:text-fg-default rounded-md hover:bg-bg-overlay transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-        >
-          <span>⚙</span>
-          <span>Settings</span>
-        </button>
+        {SIDEBAR_FOOTER_ITEMS.map((item) => (
+          <NavLink key={item.to} to={item.to} end className={footerNavLinkClass}>
+            <span>{item.icon}</span>
+            <span>{item.label}</span>
+          </NavLink>
+        ))}
       </div>
     </nav>
   );

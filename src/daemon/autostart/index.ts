@@ -100,12 +100,18 @@ export async function enableAutostart(opts: EnableAutostartOptions): Promise<voi
     mkdirSync(sd, { recursive: true });
     writeDaemonState(sd, state);
 
+    // Environments without a systemd user instance (Docker containers, some CI)
+    // can't host the autostart service at all — point at the foreground mode
+    // instead of leaving a bare systemctl error.
+    const noSystemdHint =
+      " If this environment has no systemd (e.g. a container), skip `memkin up` and run the " +
+      "daemon in the foreground instead: `memkin serve --mcp-http`.";
     const reloadResult = await runner.run(["systemctl", "--user", "daemon-reload"]);
     if (reloadResult.code !== 0) {
       rmSync(systemdUnitPath(home), { force: true });
       rmSync(join(sd, "daemon.json"), { force: true });
       throw new Error(
-        `systemctl daemon-reload failed (exit ${reloadResult.code}): ${reloadResult.stderr || reloadResult.stdout}`,
+        `systemctl daemon-reload failed (exit ${reloadResult.code}): ${reloadResult.stderr || reloadResult.stdout}.${noSystemdHint}`,
       );
     }
     const enableResult = await runner.run([
@@ -119,7 +125,7 @@ export async function enableAutostart(opts: EnableAutostartOptions): Promise<voi
       rmSync(systemdUnitPath(home), { force: true });
       rmSync(join(sd, "daemon.json"), { force: true });
       throw new Error(
-        `systemctl enable failed (exit ${enableResult.code}): ${enableResult.stderr || enableResult.stdout}`,
+        `systemctl enable failed (exit ${enableResult.code}): ${enableResult.stderr || enableResult.stdout}.${noSystemdHint}`,
       );
     }
     // FIX 4: wire --linger so the service survives user logout

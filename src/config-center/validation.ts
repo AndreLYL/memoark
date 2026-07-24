@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { validateEmbeddingDimensions } from "../core/embedding-dimensions.js";
 import {
   FEISHU_BOT_CREDENTIALS_HINT,
   feishuNeedsBotCredentials,
@@ -110,11 +111,9 @@ export function validateDraft(config: PartialConfig): ConfigDiagnostic[] {
     );
   }
 
-  if (
-    config.embedding?.dimensions !== undefined &&
-    !isPositiveNumber(config.embedding.dimensions, 1)
-  ) {
-    add(diagnostics, "embedding.dimensions", "error", "Embedding dimensions must be positive");
+  const embeddingDimensionsError = validateEmbeddingDimensions(config.embedding?.dimensions);
+  if (embeddingDimensionsError) {
+    add(diagnostics, "embedding.dimensions", "error", embeddingDimensionsError);
   }
 
   if (

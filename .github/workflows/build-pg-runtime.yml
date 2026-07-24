@@ -56,10 +56,17 @@ jobs:
           - runner: macos-15-intel
             platform: darwin
             arch: x64
-          - runner: ubuntu-24.04
+          # Build linux on the OLDEST supported LTS runner on purpose: the
+          # binaries require the build host's glibc as a minimum at runtime
+          # (24.04 links GLIBC_2.38 symbols via strlcpy/strlcat; 22.04 keeps
+          # the baseline at glibc 2.35, covering Ubuntu 22.04 / Debian 12).
+          # After republishing from these runners, update LINUX_MIN_GLIBC in
+          # src/store/managed/pg-runtime-provider.ts to "2.35" together with
+          # the new manifest sha256 pins.
+          - runner: ubuntu-22.04
             platform: linux
             arch: x64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-22.04-arm
             platform: linux
             arch: arm64
 

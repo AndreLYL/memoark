@@ -39,6 +39,16 @@ const LLM_MODELS = {
   anthropic: "claude-3-haiku-20240307",
   mock: "mock-model",
 };
+
+// Same defaults the web setup wizard saves (Review step, auto-fetch ON): serve's
+// scheduler derives the actual source list from the enabled channels, so an empty
+// `sources` map here means "all enabled channels at the default interval".
+const DEFAULT_SCHEDULER: NonNullable<PartialConfig["scheduler"]> = {
+  enabled: true,
+  tick_interval_secs: 60,
+  defaults: { interval_secs: 3600 },
+  sources: {},
+};
 const OPENAI_API_KEY_PLACEHOLDER = "$" + "{OPENAI_API_KEY}";
 const ANTHROPIC_API_KEY_PLACEHOLDER = "$" + "{ANTHROPIC_API_KEY}";
 
@@ -128,6 +138,7 @@ function buildAutoConfig(keys: DetectedApiKeys, sources: DetectedSource[]): Part
       http_port: 3927,
       mcp_transport: "stdio",
     },
+    scheduler: DEFAULT_SCHEDULER,
   };
 }
 
@@ -429,6 +440,7 @@ async function buildInteractiveConfig(
       http_port: 3927,
       mcp_transport: "stdio",
     },
+    scheduler: DEFAULT_SCHEDULER,
   };
 }
 
@@ -592,6 +604,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
       ? {
           newInstallEngine: resolveDefaultEngineForNewInstall({
             platform: process.platform,
+            arch: process.arch,
             home: homedir(),
           }),
         }

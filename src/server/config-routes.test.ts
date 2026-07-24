@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { createConfigRoutes, friendlyLarkError } from "./config-routes.js";
 
 vi.mock("../setup/connection-tests.js", () => ({
@@ -100,6 +101,31 @@ describe("createConfigRoutes", () => {
     const data = (await res.json()) as { ok: boolean; diagnostics: Array<{ severity: string }> };
     expect(data.ok).toBe(false);
     expect(data.diagnostics.some((d) => d.severity === "error")).toBe(true);
+  });
+
+  it("POST /api/config returns 422 for embedding dimensions above the HNSW limit", async () => {
+    const app = createConfigRoutes({ configPath });
+    const res = await app.request("/api/config", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        llm: { provider: "openai", model: "gpt-4o-mini" },
+        sources: { "claude-code": { enabled: true } },
+        embedding: { dimensions: 2001 },
+      }),
+    });
+    expect(res.status).toBe(422);
+    const data = (await res.json()) as {
+      ok: boolean;
+      diagnostics: Array<{ path: string; message: string }>;
+    };
+    expect(data.ok).toBe(false);
+    expect(data.diagnostics).toContainEqual({
+      path: "embedding.dimensions",
+      severity: "error",
+      message:
+        "Embedding dimensions cannot exceed 2000. pgvector HNSW indexes support at most 2000 dimensions. For OpenAI text-embedding-3-large, use 1536. Got: 2001.",
+    });
   });
 
   it("POST /api/test/llm returns ok with latency_ms", async () => {
@@ -235,6 +261,104 @@ describe("createConfigRoutes", () => {
     });
     expect(res.status).toBe(422);
     expect(onConfigSaved).not.toHaveBeenCalled();
+  });
+
+  // ---- store.engine: new-install default + downgrade protection ----------------
+
+  /** Minimal body that passes validateDraft; store shape varies per test. */
+  const validBody = (store?: Record<string, unknown>) => ({
+    llm: {
+      provider: "openai",
+      model: "gpt-4o-mini",
+      api_key: "sk-test",
+      base_url: "https://api.openai.com/v1",
+    },
+    sources: { "claude-code": { enabled: true } },
+    embedding: {
+      provider: "openai",
+      model: "text-embedding-3-large",
+      dimensions: 1536,
+      api_key: "sk-test",
+      base_url: "https://api.openai.com/v1",
+    },
+    ...(store ? { store } : {}),
+  });
+
+  const postConfig = (app: ReturnType<typeof createConfigRoutes>, body: unknown) =>
+    app.request("/api/config", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const savedStore = () =>
+    (parse(readFileSync(configPath, "utf-8")) as { store: Record<string, unknown> }).store;
+
+  it("POST /api/config on a NEW install injects the platform default engine (managed)", async () => {
+    const resolveNewInstallEngine = vi.fn(() => "managed" as const);
+    const app = createConfigRoutes({ configPath, resolveNewInstallEngine });
+    // No store at all in the body — exactly what the web wizard sends.
+    const res = await postConfig(app, validBody());
+    expect(res.status).toBe(200);
+    expect(resolveNewInstallEngine).toHaveBeenCalledOnce();
+    expect(savedStore().engine).toBe("managed");
+  });
+
+  it("POST /api/config on a NEW install honours an explicit engine over the injected default", async () => {
+    const app = createConfigRoutes({ configPath, resolveNewInstallEngine: () => "managed" });
+    const res = await postConfig(app, validBody({ engine: "pglite", data_dir: "~/.memkin/data" }));
+    expect(res.status).toBe(200);
+    expect(savedStore().engine).toBe("pglite");
+  });
+
+  it("POST /api/config re-save preserves an existing postgres engine when the client omits it", async () => {
+    writeFileSync(
+      configPath,
+      [
+        "llm:",
+        "  provider: openai",
+        "  model: gpt-4o",
+        "store:",
+        "  engine: postgres",
+        "  database_url: postgres://memkin:pw@127.0.0.1:5432/memkin",
+        "  pool_size: 5",
+        "",
+      ].join("\n"),
+    );
+    const app = createConfigRoutes({ configPath, resolveNewInstallEngine: () => "managed" });
+    // StorageSection-style save: store is replaced with just {data_dir}.
+    const res = await postConfig(app, validBody({ data_dir: "~/.memkin/data" }));
+    expect(res.status).toBe(200);
+    const store = savedStore();
+    expect(store.engine).toBe("postgres");
+    expect(store.database_url).toBe("postgres://memkin:pw@127.0.0.1:5432/memkin");
+    expect(store.pool_size).toBe(5);
+  });
+
+  it("POST /api/config re-save preserves a managed engine and its runtime_dir", async () => {
+    writeFileSync(
+      configPath,
+      ["store:", "  engine: managed", "  managed:", "    runtime_dir: /opt/memkin-pg", ""].join(
+        "\n",
+      ),
+    );
+    const app = createConfigRoutes({ configPath });
+    const res = await postConfig(app, validBody({ data_dir: "~/.memkin/data" }));
+    expect(res.status).toBe(200);
+    const store = savedStore();
+    expect(store.engine).toBe("managed");
+    expect(store.managed).toEqual({ runtime_dir: "/opt/memkin-pg" });
+  });
+
+  it("POST /api/config re-save of an engine-less config stays pglite (no surprise engine switch)", async () => {
+    writeFileSync(configPath, "llm:\n  provider: openai\n  model: gpt-4o\n");
+    const resolveNewInstallEngine = vi.fn(() => "managed" as const);
+    const app = createConfigRoutes({ configPath, resolveNewInstallEngine });
+    const res = await postConfig(app, validBody());
+    expect(res.status).toBe(200);
+    // New-install injection must not fire for an existing config.
+    expect(resolveNewInstallEngine).not.toHaveBeenCalled();
+    expect(savedStore().engine).toBe("pglite");
   });
 });
 

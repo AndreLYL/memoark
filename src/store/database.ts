@@ -1,4 +1,5 @@
 import type { Config } from "../core/config.js";
+import { assertValidEmbeddingDimensions } from "../core/embedding-dimensions.js";
 import { SCHEMA_SQL } from "../embedded-assets.generated.js";
 import { createEngine } from "./engine-factory.js";
 import { runMigrations } from "./migrations/index.js";
@@ -17,6 +18,7 @@ export const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
  * `invalid input syntax for type integer: "__embedding_dim__"`.
  */
 export function loadSchemaSql(dims: number = DEFAULT_EMBEDDING_DIMENSIONS): string {
+  assertValidEmbeddingDimensions(dims);
   return SCHEMA_SQL.replace("__EMBEDDING_DIM__", String(dims));
 }
 
@@ -76,6 +78,7 @@ export class Database {
         : dataDirOrConfig;
 
     const dims = opts?.embeddingDimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+    assertValidEmbeddingDimensions(dims);
 
     let executor: SqlExecutor | undefined;
     let mismatch: EmbeddingMismatch | null = null;

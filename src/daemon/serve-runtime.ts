@@ -24,12 +24,13 @@ import {
   type PipelineResult,
   runPipeline,
 } from "../core/pipeline.js";
-import { statePath } from "../core/state.js";
+import { buildPipelineConfig } from "../core/pipeline-factory.js";
 import { createLLMProvider, createMockProvider } from "../extractors/providers/index.js";
 import type { AccumulateDeps } from "../profile/accumulate.js";
 import type { DaemonStatus, StoreContext } from "../server/api.js";
 import { ChatNameRefreshJob } from "../server/chat-name-refresh-job.js";
 import { PersonBehaviorStore } from "../store/person-behavior.js";
+import { effectiveSchedulerConfig } from "./effective-scheduler.js";
 import { Scheduler } from "./scheduler.js";
 
 /** A serve session's config-derived runtime, rebuilt/replaced as a whole on reload. */
@@ -123,12 +124,17 @@ export async function buildServeRuntime(
   let docsCursor: CursorStore | undefined;
   let chatNameRefreshJob: ChatNameRefreshJob | undefined;
 
-  if (config.scheduler) {
+  // Effective scheduler config: schedulable sources are derived from the enabled
+  // data channels; `scheduler.sources` only carries per-source overrides. Fresh
+  // installs save `sources: {}` — constructing the Scheduler from the raw block
+  // scheduled nothing, so serve never auto-captured any channel.
+  const schedulerConfig = effectiveSchedulerConfig(config);
+  if (schedulerConfig) {
     // Always construct Scheduler when the block is present (even if enabled=false),
     // so ServeRuntimeHolder always holds a Scheduler for future cold-start wiring.
-    scheduler = new Scheduler(config.scheduler, stateDir);
+    scheduler = new Scheduler(schedulerConfig, stateDir);
 
-    if (config.scheduler.enabled) {
+    if (schedulerConfig.enabled) {
       bootstrapCollectors(config.sources, config.__context.projectRoot);
 
       const llmConfig = { ...config.llm };
@@ -141,16 +147,11 @@ export async function buildServeRuntime(
         ? createLLMProvider(llmConfig)
         : createMockProvider(new Map());
 
-      const pipelineConfig: PipelineConfig = {
-        dedup_checkpoint: statePath("dedup.jsonl"),
-        cursor_checkpoint: statePath("cursors.yaml"),
-        block_gap_minutes: config.block_builder.block_gap_minutes,
-        max_block_tokens: config.block_builder.max_block_tokens,
-        max_block_messages: config.block_builder.max_block_messages,
-        privacy: config.privacy,
-        output_dir: process.cwd(),
-        block_concurrency: config.pipeline?.block_concurrency,
-      };
+      // Shared factory so dedup/cursor/redaction-map state anchors to the config
+      // root exactly like `memkin extract`. The hand-rolled config this replaces
+      // defaulted statePath to process.cwd(), so a daemon launched with cwd=/ or
+      // cwd=$HOME scattered its checkpoints away from scheduler-state.json.
+      const pipelineConfig: PipelineConfig = buildPipelineConfig(config, process.cwd());
 
       // ── Person communication profile (Spec 8): behavior-layer accumulation.
       // No-op unless config.profile.enabled (checked inside accumulateBehavior),
@@ -166,8 +167,9 @@ export async function buildServeRuntime(
       };
 
       // ── G2: feishu.docs special case ────────────────────────────────────────
-      // docs uses runDocSource (not runPipeline) and manages its own cursor state.
-      docsCursor = new CursorStore(statePath("cursors.yaml"));
+      // docs uses runDocSource (not runPipeline) and manages its own cursor state,
+      // sharing the pipeline's cursor file so both anchor to the config root.
+      docsCursor = new CursorStore(pipelineConfig.cursor_checkpoint);
       const feishuCfg = config.sources.feishu;
       docsClient =
         feishuCfg?.enabled && feishuCfg.sources?.docs?.enabled

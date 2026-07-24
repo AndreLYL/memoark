@@ -48,6 +48,25 @@ export function resolveMcpHttpRuntime(
   return { bind, port, allowedOrigins, allowedHosts, readOnly, instanceId: flags.daemonInstanceId };
 }
 
+/**
+ * The MCP HTTP runtime exactly as `memkin up` launches the always-on daemon:
+ * loopback bind and read-write are forced by launch flags (`--mcp-bind
+ * 127.0.0.1 --mcp-read-write`), regardless of what the YAML says.
+ *
+ * BOTH sides of the serving-subset drift check must derive their hash from
+ * this function — `up` when storing daemon.json and `status` when recomputing.
+ * `up` used to hardcode `readOnly: false` while `status` re-read
+ * `cfg.read_only` (true in the default config), so the hashes could never
+ * match and "Serving subset changed" showed permanently.
+ */
+export function resolveDaemonLaunchRuntime(
+  cfg: McpHttpConfigSubset,
+  opts: { port?: number } = {},
+): McpHttpRuntime {
+  const resolved = resolveMcpHttpRuntime(cfg, { mcpPort: opts.port });
+  return { ...resolved, bind: "127.0.0.1", readOnly: false };
+}
+
 export function assertLoopbackOrThrow(rt: { bind: string }): void {
   if (isPublicBindHost(rt.bind)) {
     throw new Error(

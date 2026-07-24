@@ -36,7 +36,7 @@ import { getMissingEnvVarsForCommand, validateEnvForCommand } from "./core/env-v
 import { type HandleKind, PersonIdentityStore } from "./core/person-identity.js";
 import { runPipeline } from "./core/pipeline.js";
 import { buildPipelineConfig } from "./core/pipeline-factory.js";
-import { ensureStateDir, statePath } from "./core/state.js";
+import { ensureStateDir, stateDirFor, statePath } from "./core/state.js";
 import {
   rawYamlHash,
   readDaemonState,
@@ -64,7 +64,11 @@ import { createApiApp } from "./server/api.js";
 import { getSessionContext } from "./server/context.js";
 import { createMcpServer } from "./server/mcp.js";
 import { createMcpHttpApp } from "./server/mcp-http.js";
-import { assertLoopbackOrThrow, resolveMcpHttpRuntime } from "./server/mcp-http-runtime.js";
+import {
+  assertLoopbackOrThrow,
+  resolveDaemonLaunchRuntime,
+  resolveMcpHttpRuntime,
+} from "./server/mcp-http-runtime.js";
 import { openBrowser } from "./server/open-browser.js";
 import { startServer } from "./server/runtime.js";
 import { serveHttp, serveStaticSpa } from "./server/serve.js";
@@ -384,9 +388,11 @@ program
       warnings.push("Create one with: memkin init");
     }
 
-    // Check state directory
+    // Check state directory (stateDirFor, NOT resolve(root, ".memkin") — the
+    // home install's projectRoot already IS ~/.memkin, and recomputing the
+    // nested path here would make doctor bless the very layout bug it should flag)
     const projectRoot = config?.__context.projectRoot ?? dirname(configPath);
-    const stateDir = resolve(projectRoot, ".memkin");
+    const stateDir = stateDirFor(projectRoot);
     if (existsSync(stateDir)) {
       ok.push(`State directory exists: ${stateDir}`);
     } else {
@@ -394,7 +400,7 @@ program
       warnings.push("It will be created automatically on first extract");
     }
 
-    const cwdStateDir = resolve(process.cwd(), ".memkin");
+    const cwdStateDir = stateDirFor();
     if (cwdStateDir !== stateDir && existsSync(cwdStateDir)) {
       warnings.push(`Legacy state directory found at current cwd: ${cwdStateDir}`);
       warnings.push(`Current config-root state directory is: ${stateDir}`);
@@ -1573,7 +1579,7 @@ docsCmd
   .action(async (options) => {
     try {
       const config = loadConfig(options.config);
-      ensureStateDir();
+      ensureStateDir(config.__context.projectRoot);
       const feishu = config.sources.feishu;
       if (!feishu?.enabled || !feishu.sources?.docs?.enabled) {
         console.error(
@@ -1602,7 +1608,7 @@ docsCmd
         ? createLLMProvider(llmConfig)
         : createMockProvider(new Map());
 
-      const cursor = new CursorStore(statePath("cursors.yaml"));
+      const cursor = new CursorStore(statePath("cursors.yaml", config.__context.projectRoot));
       cursor.load();
 
       // Identity layer for canonicalizing action_item owners → person slugs and
@@ -1888,7 +1894,9 @@ program
       try {
         currentRawHash = rawYamlHash(stored.config_path);
         const cfg = loadConfig(stored.config_path);
-        const rt = resolveMcpHttpRuntime(cfg.mcp.http, {});
+        // Same helper `up` stores its hash from — recomputing from bare config
+        // (read_only: true by default) made the drift warning permanent.
+        const rt = resolveDaemonLaunchRuntime(cfg.mcp.http);
         currentServingHash = servingSubsetHash({
           bind: rt.bind,
           port: rt.port,

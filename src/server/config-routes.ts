@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { Hono } from "hono";
 import { parse } from "yaml";
@@ -8,6 +9,7 @@ import { validateDraft } from "../config-center/validation.js";
 import { testEmbeddingConnection, testLLMConnection } from "../setup/connection-tests.js";
 import { generateConfigYaml } from "../setup/generate-config.js";
 import type { PartialConfig } from "../setup/validate-config.js";
+import { resolveDefaultEngineForNewInstall } from "../store/managed/new-install.js";
 
 /**
  * Turn a raw lark-cli failure into an actionable message + flags the setup UI can act
@@ -45,6 +47,11 @@ export interface ConfigRoutesOpts {
   onSetupComplete?: () => void;
   /** Fired after a successful config write (triggers async reload). Not awaited. */
   onConfigSaved?: () => void;
+  /**
+   * Override the new-install engine decision (tests). Defaults to
+   * resolveDefaultEngineForNewInstall on the real platform/arch/home.
+   */
+  resolveNewInstallEngine?: () => "managed" | "pglite";
 }
 
 export function createConfigRoutes(opts: ConfigRoutesOpts): Hono {
@@ -68,39 +75,59 @@ export function createConfigRoutes(opts: ConfigRoutesOpts): Hono {
   app.post("/api/config", async (c) => {
     const body = await c.req.json<PartialConfig>();
 
+    // Captured before the write: no config file on disk means this save IS the install.
+    const isNewInstall = !existsSync(opts.configPath);
+    let existing: PartialConfig = {};
+    if (!isNewInstall) {
+      existing = (parse(readFileSync(opts.configPath, "utf-8")) ?? {}) as PartialConfig;
+    }
+
     const isMasked = (v: string | undefined): boolean =>
       typeof v === "string" && v.includes("****");
 
-    if (
-      isMasked(body.llm?.api_key) ||
-      isMasked(body.embedding?.api_key) ||
-      isMasked(body.sources?.feishu?.app_secret) ||
-      isMasked(body.store?.database_url)
-    ) {
-      let existing: PartialConfig = {};
-      if (existsSync(opts.configPath)) {
-        existing = (parse(readFileSync(opts.configPath, "utf-8")) ?? {}) as PartialConfig;
-      }
-      if (isMasked(body.llm?.api_key) && body.llm) {
-        body.llm.api_key = existing.llm?.api_key ?? body.llm.api_key;
-      }
-      if (isMasked(body.embedding?.api_key) && body.embedding) {
-        body.embedding.api_key = existing.embedding?.api_key ?? body.embedding.api_key;
-      }
-      if (isMasked(body.sources?.feishu?.app_secret) && body.sources?.feishu) {
-        body.sources.feishu.app_secret =
-          existing.sources?.feishu?.app_secret ?? body.sources.feishu.app_secret;
-      }
-      if (isMasked(body.store?.database_url) && body.store) {
-        body.store.database_url = existing.store?.database_url ?? body.store.database_url;
-      }
+    if (isMasked(body.llm?.api_key) && body.llm) {
+      body.llm.api_key = existing.llm?.api_key ?? body.llm.api_key;
+    }
+    if (isMasked(body.embedding?.api_key) && body.embedding) {
+      body.embedding.api_key = existing.embedding?.api_key ?? body.embedding.api_key;
+    }
+    if (isMasked(body.sources?.feishu?.app_secret) && body.sources?.feishu) {
+      body.sources.feishu.app_secret =
+        existing.sources?.feishu?.app_secret ?? body.sources.feishu.app_secret;
+    }
+    if (isMasked(body.store?.database_url) && body.store) {
+      body.store.database_url = existing.store?.database_url ?? body.store.database_url;
+    }
+
+    // The web UI carries no engine concept (its store type only has data_dir), so a
+    // save must never downgrade an existing postgres/managed install to the pglite
+    // default. Unless the client explicitly sets an engine, carry the on-disk engine
+    // and its companion fields (database_url/pool_size/managed) over the posted store.
+    if (!isNewInstall && !body.store?.engine && existing.store?.engine) {
+      body.store = { ...existing.store, ...body.store };
     }
 
     const diagnostics = validateDraft(body);
     if (diagnostics.some((d) => d.severity === "error")) {
       return c.json({ ok: false, diagnostics }, 422);
     }
-    const yaml = generateConfigYaml(body);
+
+    // First save from the wizard: pick the engine the same way `memkin init` does —
+    // managed Postgres wherever the runtime supports it. install.sh runs
+    // `memkin init --web`, so this path is the default install path.
+    const newInstallOpts = isNewInstall
+      ? {
+          newInstallEngine:
+            opts.resolveNewInstallEngine?.() ??
+            resolveDefaultEngineForNewInstall({
+              platform: process.platform,
+              arch: process.arch,
+              home: homedir(),
+            }),
+        }
+      : undefined;
+
+    const yaml = generateConfigYaml(body, newInstallOpts);
     mkdirSync(dirname(opts.configPath), { recursive: true });
     writeFileSync(opts.configPath, yaml, "utf-8");
     opts.onConfigSaved?.();

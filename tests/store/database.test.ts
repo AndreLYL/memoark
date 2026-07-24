@@ -12,6 +12,12 @@ describe("Database.create overload + executor", () => {
     const db = await Database.create({ store: { engine: "pglite" } } as any);
     await db.close();
   });
+
+  it("rejects embedding dimensions above the pgvector HNSW limit before bootstrap", async () => {
+    await expect(Database.create(undefined, { embeddingDimensions: 2001 })).rejects.toThrow(
+      "Embedding dimensions cannot exceed 2000. pgvector HNSW indexes support at most 2000 dimensions. For OpenAI text-embedding-3-large, use 1536. Got: 2001.",
+    );
+  });
 });
 
 describe("Database", () => {

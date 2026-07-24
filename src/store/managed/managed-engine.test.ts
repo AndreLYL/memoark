@@ -34,6 +34,10 @@ function stubSupervisor(overrides: Partial<{ ensureUp: () => Promise<void> }> = 
   };
 }
 
+// Tests may run as root (containers), so pin the host preflight to "ok" —
+// the preflight itself is covered by dedicated cases below + host-support.test.ts.
+const okHost = () => ({ level: "ok" as const });
+
 function makeDeps(spy: { ensured: boolean }) {
   return {
     home,
@@ -44,6 +48,7 @@ function makeDeps(spy: { ensured: boolean }) {
           spy.ensured = true;
         },
       }),
+    hostSupport: okHost,
   };
 }
 
@@ -89,9 +94,37 @@ describe("provisionManaged", () => {
             order.push("ensureUp");
           },
         }),
+      hostSupport: okHost,
     };
     await provisionManaged(cfg, deps);
     expect(order).toEqual(["ensure", "ensureUp"]);
+  });
+
+  it("fails fast with the preflight reason on hard-no, before any provider work", async () => {
+    const cfg = { store: { engine: "managed" } } as unknown as Config;
+    const ensure = vi.fn();
+    const deps = {
+      home,
+      provider: { ensure: ensure as never },
+      makeSupervisor: () => stubSupervisor(),
+      hostSupport: () => ({ level: "hard-no" as const, reason: "cannot run as root" }),
+    };
+    await expect(provisionManaged(cfg, deps)).rejects.toThrow(
+      /managed Postgres preflight failed: cannot run as root/,
+    );
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it("proceeds on soft-no (undeterminable glibc must not block an explicit engine)", async () => {
+    const cfg = { store: { engine: "managed" } } as unknown as Config;
+    const spy = { ensured: false };
+    const deps = {
+      ...makeDeps(spy),
+      hostSupport: () => ({ level: "soft-no" as const, reason: "glibc undeterminable" }),
+    };
+    const { pgConfig } = await provisionManaged(cfg, deps);
+    expect(spy.ensured).toBe(true);
+    expect(pgConfig.store.engine).toBe("postgres");
   });
 });
 
@@ -111,6 +144,7 @@ describe("provisionManagedForeground", () => {
       provider: { ensure: async () => fakeRuntime },
       makeSupervisor: () => stubSupervisor(),
       dbCreate,
+      hostSupport: okHost,
     };
 
     await provisionManagedForeground(cfg, deps);
@@ -144,6 +178,7 @@ describe("provisionManagedForeground", () => {
       provider: { ensure: async () => fakeRuntime },
       makeSupervisor: () => stubSupervisor(),
       dbCreate,
+      hostSupport: okHost,
     });
 
     expect(dbCreate.mock.calls[0][1]).toEqual({ embeddingDimensions: 1024 });
