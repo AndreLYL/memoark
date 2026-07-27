@@ -1,8 +1,40 @@
 import { describe, expect, it } from "vitest";
 import type { LLMProvider } from "../extractors/providers/types.js";
-import { mapReduceDistill, SegmentSummarySchema } from "./map-reduce.js";
+import { mapReduceDistill, normalizeReducePayload, SegmentSummarySchema } from "./map-reduce.js";
 import { assignMsgIds } from "./msg-id.js";
 import { segmentMessages } from "./segmenter.js";
+
+describe("normalizeReducePayload", () => {
+  it("coerces msg-id string evidence into {start,end} point ranges", () => {
+    const out = normalizeReducePayload({
+      signals: [{ type: "task", evidence: ["msg-1", "msg-6"] }],
+    }) as { signals: Array<{ evidence: unknown }> };
+    expect(out.signals[0].evidence).toEqual([
+      { start: "msg-1", end: "msg-1" },
+      { start: "msg-6", end: "msg-6" },
+    ]);
+  });
+
+  it("coerces a [start,end] tuple into a range object", () => {
+    const out = normalizeReducePayload({
+      signals: [{ evidence: [["msg-2", "msg-9"]] }],
+    }) as { signals: Array<{ evidence: unknown }> };
+    expect(out.signals[0].evidence).toEqual([{ start: "msg-2", end: "msg-9" }]);
+  });
+
+  it("passes through already-correct {start,end} objects", () => {
+    const ev = [{ start: "msg-1", end: "msg-3" }];
+    const out = normalizeReducePayload({ signals: [{ evidence: ev }] }) as {
+      signals: Array<{ evidence: unknown }>;
+    };
+    expect(out.signals[0].evidence).toEqual(ev);
+  });
+
+  it("leaves non-object / signal-less input untouched", () => {
+    expect(normalizeReducePayload(null)).toBeNull();
+    expect(normalizeReducePayload({ foo: 1 })).toEqual({ foo: 1 });
+  });
+});
 
 /**
  * A scripted LLM provider that returns a queued response per call, and records

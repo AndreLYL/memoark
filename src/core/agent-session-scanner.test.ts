@@ -60,6 +60,25 @@ describe("scanAgentSessions", () => {
     expect(rows.every((r) => r.state === "discovered")).toBe(true);
   });
 
+  it("skips files older than sinceMs (the --since backfill window)", async () => {
+    const old = new Date(Date.now() - 10 * 86_400_000); // 10 days ago
+    const recent = new Date(Date.now() - 60_000);
+    await writeSession("proj", "old-sess", '{"a":1}\n', old);
+    await writeSession("proj", "new-sess", '{"b":2}\n', recent);
+
+    const res = await scanAgentSessions({
+      sourceInstance: "claude-code",
+      layout: layout(dir),
+      store,
+      executor: db.executor,
+      sinceMs: Date.now() - 2 * 86_400_000, // 2 days ago
+    });
+
+    expect(res.discovered).toBe(1);
+    const rows = await store.listSessions({ sourceInstance: "claude-code" });
+    expect(rows.map((r) => r.sessionId)).toEqual(["new-sess"]);
+  });
+
   it("does not create a new row when content is unchanged on a second scan", async () => {
     await writeSession("proj", "sess-1", '{"a":1}\n');
     const opts = {

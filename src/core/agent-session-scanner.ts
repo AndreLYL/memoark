@@ -23,6 +23,13 @@ export interface ScanAgentSessionsOpts {
   layout: SessionLayout;
   store: AgentSessionStore;
   executor: SqlConn;
+  /**
+   * Optional lower bound on file mtime (ms). Files older than this are not
+   * recorded — the `--since` lever for historical backfill so a small, recent
+   * window can be validated before scanning the full 5-6 weeks. The watermark
+   * still tracks the newest file seen regardless of this filter.
+   */
+  sinceMs?: number;
 }
 
 export interface ScanResult {
@@ -61,6 +68,10 @@ export async function scanAgentSessions(opts: ScanAgentSessionsOpts): Promise<Sc
       continue;
     }
     if (mtimeMs > maxMtime) maxMtime = mtimeMs;
+
+    // `--since` filter: skip files older than the requested window (watermark
+    // already tracked above, so it still advances past skipped-older files).
+    if (opts.sinceMs != null && mtimeMs < opts.sinceMs) continue;
 
     const snapshot = await readStableSnapshot(file);
     if (!snapshot) {

@@ -51,12 +51,21 @@ export interface DistillerOpts {
   now?: () => number;
 }
 
+/** Parses raw transcript content into ordered messages for a given source. */
+export type TranscriptParser = (content: string, sourceInstance: string) => RawInputMessage[];
+
 export interface SessionDistillerDeps {
   sessions: AgentSessionStore;
   payloads: DistilledPayloadStore;
   provider: LLMProvider;
   privacy: PrivacyConfig;
   transcripts: TranscriptSource;
+  /**
+   * Override how raw transcript content is parsed into messages. Defaults to the
+   * claude-code JSONL shape; the historical backfill supplies a platform-aware
+   * parser so codex (and other) formats distill correctly.
+   */
+  parse?: TranscriptParser;
   opts?: DistillerOpts;
 }
 
@@ -78,9 +87,11 @@ const DEFAULTS = {
 
 export class SessionDistiller {
   private readonly now: () => number;
+  private readonly parse: TranscriptParser;
 
   constructor(private readonly deps: SessionDistillerDeps) {
     this.now = deps.opts?.now ?? (() => Date.now());
+    this.parse = deps.parse ?? ((content) => parseTranscript(content));
   }
 
   private opt<K extends keyof typeof DEFAULTS>(key: K): number {
@@ -88,8 +99,14 @@ export class SessionDistiller {
     return typeof v === "number" ? v : DEFAULTS[key];
   }
 
-  /** Process one tick over pending revisions. */
-  async runTick(): Promise<TickResult> {
+  /**
+   * Process one tick over pending revisions.
+   *
+   * `opts.limit` caps how many pending revisions are considered this tick — the
+   * cost lever for backfill: process a small batch first before burning LLM on
+   * the full historical backlog (spec §11 押后 backfill / task cost-awareness).
+   */
+  async runTick(opts?: { limit?: number }): Promise<TickResult> {
     const result: TickResult = {
       considered: 0,
       distilled: 0,
@@ -99,10 +116,13 @@ export class SessionDistiller {
       replayed: 0,
     };
 
-    const pending = [
+    let pending = [
       ...(await this.deps.sessions.listSessions({ state: "discovered" })),
       ...(await this.deps.sessions.listSessions({ state: "retrying" })),
     ];
+    if (opts?.limit != null && opts.limit >= 0) {
+      pending = pending.slice(0, opts.limit);
+    }
 
     for (const rev of pending) {
       result.considered++;
@@ -150,7 +170,7 @@ export class SessionDistiller {
       }
     }
 
-    const messages = parseTranscript(file.content);
+    const messages = this.parse(file.content, rev.sourceInstance);
     if (messages.length === 0) {
       result.skipped++;
       return;

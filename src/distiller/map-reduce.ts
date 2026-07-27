@@ -20,6 +20,7 @@
  */
 
 import { z } from "zod";
+import { parseLlmJson } from "../core/llm-json.js";
 import type { LLMProvider } from "../extractors/providers/types.js";
 import {
   type DistilledPayload,
@@ -89,7 +90,7 @@ export async function mapReduceDistill(
       ],
       { responseFormat: "json" },
     );
-    const parsed = SegmentSummarySchema.parse(JSON.parse(raw));
+    const parsed = SegmentSummarySchema.parse(parseLlmJson(raw));
     summaries.push(parsed);
     carry = parsed.carry_forward;
   }
@@ -110,7 +111,9 @@ export async function mapReduceDistill(
     { responseFormat: "json" },
   );
 
-  const reduceParsed = DistilledPayloadSchema.parse(JSON.parse(reduceRaw));
+  const reduceParsed = DistilledPayloadSchema.parse(
+    normalizeReducePayload(parseLlmJson(reduceRaw)),
+  );
 
   // Belt-and-suspenders: strip any signal whose topic was overturned, even if the
   // reducer wrongly re-included it.
@@ -123,4 +126,33 @@ export async function mapReduceDistill(
   }
 
   return { payload: finalRes.payload, overturnedTopics, segmentSummaries: summaries };
+}
+
+/**
+ * Normalize a reduce payload's evidence into the `MsgRange` ({start,end}) shape
+ * before strict validation. The mandated production model (MiniMax, D4) commonly
+ * emits evidence as bare msg-id strings (`"evidence": ["msg-4","msg-5"]`) rather
+ * than range objects; each string is coerced to a point range {start:s, end:s},
+ * and an already-correct {start,end} object passes through untouched. This keeps
+ * the strict contract (§5) intact while tolerating the real model's output — the
+ * downstream `validateEvidence` still rejects any out-of-range msg-id.
+ */
+export function normalizeReducePayload(input: unknown): unknown {
+  if (!input || typeof input !== "object") return input;
+  const obj = input as { signals?: unknown };
+  if (!Array.isArray(obj.signals)) return input;
+  obj.signals = obj.signals.map((sig) => {
+    if (!sig || typeof sig !== "object") return sig;
+    const s = sig as { evidence?: unknown };
+    if (Array.isArray(s.evidence)) {
+      s.evidence = s.evidence.map((e) => {
+        if (typeof e === "string") return { start: e, end: e };
+        if (Array.isArray(e) && e.length >= 2) return { start: String(e[0]), end: String(e[1]) };
+        if (Array.isArray(e) && e.length === 1) return { start: String(e[0]), end: String(e[0]) };
+        return e;
+      });
+    }
+    return s;
+  });
+  return obj;
 }

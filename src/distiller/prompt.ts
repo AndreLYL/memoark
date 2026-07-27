@@ -24,6 +24,32 @@ are. Distinguish: the user deciding (user_confirmed) vs. you proposing
 (assistant_proposed) vs. a claim proven by a tool result (assistant_claimed).
 Skip transient debugging chatter and unconfirmed proposals.`;
 
+/**
+ * Compact machine-checkable contract shown to the model (spec §5). Without this
+ * the model only guesses common fields and drops per-type required fields
+ * (preference.subject/category, reference.url, task.status, …) and the evidence
+ * shape — every one of which is a hard Zod-validation failure. Keeping the exact
+ * enum values + per-type fields inline is a correctness requirement, not tuning.
+ */
+export const SIGNAL_CONTRACT = `Each signal MUST match this schema exactly.
+Common fields (ALL signals):
+- type: one of "decision" | "task" | "reference" | "preference" | "knowledge" | "discovery"
+- topic: short stable title
+- what: the fact/decision itself
+- why: motivation (optional)
+- project: project name (optional)
+- entities: array of entity name strings (may be empty)
+- authority: "user_confirmed" (user decided/confirmed) | "assistant_proposed" (you proposed, unconfirmed) | "assistant_claimed" (you assert, e.g. from a tool result)
+- evidence: NON-EMPTY array of msg-id ranges, each an OBJECT {"start":"msg-N","end":"msg-M"} — only reference msg-ids shown in the messages; never invent ids or line numbers
+- persistence_reason: why this is worth remembering in 30 days
+Per-type REQUIRED extra fields:
+- decision: (no extra fields)
+- task: status one of "open" | "in_progress" | "done" | "cancelled"; owner (optional); due_date (optional, ISO 8601 date-time)
+- reference: url (REQUIRED — the url string MUST appear verbatim in the cited evidence messages); trigger (optional)
+- preference: subject (REQUIRED); category one of "tooling" | "workflow" | "communication" | "coding_style" | "ui" | "personal" | "other"
+- knowledge: source_kind one of "documentation" | "experiment" | "external_reference" | "domain_fact" | "observation"; valid_at / invalid_at (optional, ISO 8601)
+- discovery: subtype one of "insight" | "pattern" | "risk" | "procedure"`;
+
 export interface MapPromptInput {
   criteria?: string;
   segmentText: string;
@@ -45,13 +71,17 @@ ${carrySection}
 
 ${input.segmentText}
 
+## Signal contract
+
+${SIGNAL_CONTRACT}
+
 ## Instructions
 
 Distill THIS segment only. Output ONLY JSON of shape:
 {
   "seg_no": ${input.segNo},
   "summary": "<one-paragraph gist of this segment>",
-  "tentative_signals": [ /* candidate signals per the contract */ ],
+  "tentative_signals": [ /* candidate signals matching the contract above */ ],
   "overturned": [ { "topic": "<a topic from earlier that is now retracted>", "reason": "..." } ],
   "carry_forward": "<in-progress topics / undecided items to hand to the next segment>"
 }`;
@@ -80,10 +110,14 @@ ${summariesJson}
 
 ${overturnedList}
 
+## Signal contract
+
+${SIGNAL_CONTRACT}
+
 ## Instructions
 
 Merge the tentative signals across all segments into the final session payload.
 RULE: any conclusion that appears in the overturned list above MUST NOT enter the
 final signals. Deduplicate: no two final signals may share the same (type, topic).
-Output ONLY JSON of shape { "signals": [ ...signals per the contract... ] }.`;
+Output ONLY JSON of shape { "signals": [ ...signals matching the contract above... ] }.`;
 }

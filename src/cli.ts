@@ -698,6 +698,65 @@ sessionsCmd
     console.log(`sessions purge ${id}: not yet implemented (arrives with PR-2 distiller)`);
   });
 
+/**
+ * Backfill — historical agent-session cleanup driver (spec §11 押后 backfill).
+ * Scans historical claude-code/codex JSONL into the ledger, distills discovered
+ * revisions via the SessionDistiller, and applies each payload to the isolated
+ * `staging` schema with the PR-4 apply engine (target=staging). Resumable +
+ * idempotent; --limit/--since/--dry-run keep the first passes cheap.
+ */
+program
+  .command("backfill")
+  .description("Backfill historical agent sessions into the staging schema (validation)")
+  .option("-c, --config <path>", "Path to config file")
+  .option("--limit <n>", "Cap sessions processed at each stage (cost lever)")
+  .option("--since <date>", "Only scan session files modified on/after this date (YYYY-MM-DD)")
+  .option("--dry-run", "Scan + report projected work only; no distillation, no LLM")
+  .option("--no-report", "Skip the staging-vs-public acceptance report")
+  .action(async (options) => {
+    const { buildBackfillDriver } = await import("./backfill/factory.js");
+    const { buildBackfillReport, formatBackfillReport } = await import("./backfill/report.js");
+
+    const config = loadConfig(options.config);
+
+    let sinceMs: number | undefined;
+    if (options.since) {
+      const parsed = Date.parse(options.since);
+      if (Number.isNaN(parsed)) {
+        console.error(`Invalid --since date: ${options.since}`);
+        process.exit(1);
+      }
+      sinceMs = parsed;
+    }
+    const limit = options.limit != null ? Number(options.limit) : undefined;
+    if (limit != null && (!Number.isInteger(limit) || limit < 0)) {
+      console.error(`Invalid --limit: ${options.limit}`);
+      process.exit(1);
+    }
+
+    const stores = await createStores(config);
+    try {
+      const driver = buildBackfillDriver({ config, db: stores.db });
+      const result = await driver.run({ limit, sinceMs, dryRun: Boolean(options.dryRun) });
+
+      console.log(JSON.stringify(result, null, 2));
+
+      if (result.stageApply && result.stageApply.productionLeak !== 0) {
+        console.error(
+          `\n⚠ production leak detected: ${result.stageApply.productionLeak} rows — staging isolation FAILED`,
+        );
+        process.exitCode = 1;
+      }
+
+      if (options.report !== false && !result.dryRun) {
+        const rep = await buildBackfillReport(stores.db.executor);
+        console.log(`\n${formatBackfillReport(rep)}`);
+      }
+    } finally {
+      await stores.db.close();
+    }
+  });
+
 async function runServe(options: {
   config?: string;
   mcp?: boolean;

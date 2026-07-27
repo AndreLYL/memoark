@@ -196,6 +196,21 @@ export class AgentSessionStore {
     return rowToRevision(r.rows[0]);
   }
 
+  /**
+   * Stamp the per-target apply timestamp (spec §3.1: distill state and per-target
+   * apply state are recorded separately). Does NOT change `state` — a staging
+   * apply must not mark the revision production-`done`. Idempotent: re-stamping is
+   * harmless and doubles as the backfill's resume marker (skip already-applied).
+   */
+  async markTargetApplied(id: number, target: "staging" | "production"): Promise<void> {
+    const col = target === "staging" ? "staging_applied_at" : "prod_applied_at";
+    const r = await this.pg.query<{ id: number }>(
+      `UPDATE agent_sessions SET ${col} = NOW(), updated_at = NOW() WHERE id = $1 RETURNING id`,
+      [id],
+    );
+    if (r.rows.length === 0) throw new Error(`agent_sessions row ${id} not found`);
+  }
+
   /** Increment retry_count (and refresh updated_at). Threshold policy lives in the caller. */
   async incrementRetry(id: number): Promise<number> {
     const r = await this.pg.query<{ retry_count: number }>(
