@@ -1,6 +1,6 @@
 {
   "name": "memkin",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "Local-first personal memory system — extracts signals from Feishu/Lark chats and AI-agent sessions into a private knowledge graph, served to any agent via MCP",
   "type": "module",
   "bin": {

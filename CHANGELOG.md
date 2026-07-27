@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-07-28
+
+### Added
+
+- **`memkin backfill` — historical backfill CLI**: replays historical agent sessions through
+  the new distiller + apply engine into the isolated `staging` schema, then prints a
+  staging-vs-public acceptance report (page counts by type + sample diffs). It is the
+  validation harness for the extraction-quality redesign — it shows how the new pipeline would
+  reshape real history before any cutover, without touching public data. Flags: `--limit`
+  (cost cap), `--since <YYYY-MM-DD>`, `--dry-run` (scan + projected work only, no LLM calls),
+  `--no-report`. Platform-aware transcript reading covers both `claude-code` and `codex`.
+
 ### Fixed
 
 - **Home installs no longer nest state at `~/.memkin/.memkin/`**: `ensureStateDir`/`statePath`
@@ -42,6 +54,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and starts the capture loop (and turning it off stops it) without restarting the daemon.
 - **CLI `memkin init` now writes the same default scheduler block as the web wizard**
   (auto-fetch on, hourly interval), so CLI-initialized installs auto-capture too.
+- **`install.sh` installs no longer silently land on PGlite**: the one-command installer runs
+  `memkin init --web`, but the new-install managed-engine default was wired only into the
+  CLI/TUI `runInit` path — the web wizard's `POST /api/config` called `generateConfigYaml()`
+  without `newInstallEngine`, so every `install.sh` install got `engine: pglite` on every
+  platform, defeating the shared HTTP MCP daemon that exists to avoid PGlite's single-writer
+  lock. Also: `resolveDefaultEngineForNewInstall` was still darwin-only despite pinned
+  `linux-x64`/`linux-arm64` runtime tarballs having shipped, and web settings saves could
+  silently downgrade an existing postgres/managed install to pglite (`StorageSection` posts
+  `store: {data_dir}` and the shallow top-level merge replaced the whole `store` block).
+- **Installer no longer fails with `memkin: command not found`**: non-interactive shells may
+  not expose npm's global bin on `PATH`, so `memkin init --web` could fail right after
+  `npm i -g memkin@latest`. `scripts/install.sh` now detects the global bin from
+  `npm config get prefix`, injects it into the installer's own `PATH`, and idempotently
+  persists it to the usual shell profiles (`~/.zshrc` + `~/.bash_profile` on macOS,
+  `~/.profile` + `~/.bashrc` on Linux). Setup commands also route through a resolver that
+  falls back to the direct npm global binary path, then to `npm exec --yes memkin@latest`.
+- **Settings now opens the config UI without dropping the sidebar**: `/config` moved under the
+  admin `Shell` via shared route definitions, and the inert sidebar Settings button became a
+  real router nav item.
+- **Invalid embedding dimensions fail with an actionable error instead of a PGlite stack
+  trace**: pgvector's HNSW index caps at 2000 dimensions. That cap and its user-facing message
+  are now centralized in one validator, enforced in the config-center and setup validation
+  paths before a config save, and checked at database bootstrap before schema execution.
+
+## [0.4.6] - 2026-07-21
+
+### Added
+
+- **One-command installer**: `curl | sh` (`scripts/install.sh`) that installs Memkin, registers
+  a background service, and auto-wires the MCP server into detected agents.
+- **Managed Postgres runtime, platform- and arch-aware**: a pinned `pg-runtime` manifest with a
+  4-way build pipeline (macOS/Linux × x64/arm64) and real pinned sha256 checksums, so `memkin up`
+  can provision a managed Postgres instead of PGlite.
+- **Theme-aware knowledge graph** in the web UI, plus a refreshed README screenshot.
+- **Dockerfile** so the MCP server passes Glama registry checks.
+
+### Changed
+
+- README redesign for launch: slimmer hero, a `docs/` handbook, and an acknowledgements section.
+
+### Fixed
+
+- **Scheduled capture now auto-embeds**: added a background embed sweep in the daemon — captured
+  pages previously landed without embeddings until something else triggered embedding.
+- **First install no longer breaks on machines that have Bun**: runtime detection plus home
+  config discovery, so the CLI picks the right runtime and finds `~/.memkin` config.
+- **Feishu collector works under launchd**: resolve `node` on `PATH` when spawning `lark-cli`
+  (launchd's minimal environment lacked it).
+- **Feishu auth**: `auth status` uses `--json` (not `--format json`), and user-only auth saves
+  without requiring app credentials.
+
+## [0.4.5] - 2026-07-11
+
+### Added
+
+- **Express quick-start** in setup: soft-fail groups so one unconfigured integration no longer
+  blocks the whole wizard, plus a `running` banner in the CLI.
+- **In-wizard Feishu authentication** endpoints, with friendly `lark-cli` error messages
+  replacing raw CLI output.
+
+### Fixed
+
+- **LLM "Test Connection" now reports the real HTTP status** on non-JSON provider responses,
+  instead of a misleading `Failed to parse JSON`.
+
+## [0.4.4] - 2026-07-10
+
+### Fixed
+
+- **`npx memkin serve` / `start` no longer crashes with `Bun is not defined`**: the served path
+  used Bun-only APIs (`Bun.serve` / `Bun.file`), which crash for the npm/npx audience running
+  under plain Node. The serve path is now runtime-agnostic.
+- **LLM provider aliases normalized at the factory**: `custom` and `openai-compatible` now
+  resolve to the same provider.
+- Release smoke test gets a config file so it no longer exits early; Linux AppImage bundling
+  fixed via `APPIMAGE_EXTRACT_AND_RUN` + `libfuse2`; empty `APPLE_*` env dropped from the
+  desktop release (unsigned macOS build).
+
+## [0.4.3] - 2026-07-09
+
+### Added
+
+- **Extraction-quality redesign lands**: session distiller + outbox + pre-LLM privacy
+  redaction (PR-2), the complete apply engine (PR-4), and shadow run + cutover + legacy
+  retirement (PR-6).
+- Real logo icon set for the desktop app.
+
+### Changed
+
+- Tightened fragment-source extraction criteria, so weaker fragments no longer become signals.
+
+### Fixed
+
+- **Desktop sidecar could not open the database**: the PGlite asset directory is now threaded
+  into the compiled sidecar.
+- **Timeline feed upper bound is timezone-agnostic**, so the newest entries no longer drop out
+  depending on the viewer's timezone.
+
+### Security
+
+- Rotated the desktop updater public key after key exposure, and re-synced it to the
+  regenerated signing key.
+
+### CI
+
+- The web UI is now built and shipped inside the npm package (`memkin serve` resolves it from
+  `<package>/web/dist`; without it, npx users got no UI).
+- The release workflow smoke-tests the packaged CLI in a production-only install, catching
+  runtime dependencies wrongly declared under `devDependencies`.
 
 ## [0.4.2] - 2026-07-07
 
