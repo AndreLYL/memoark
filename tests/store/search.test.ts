@@ -205,6 +205,50 @@ describe("SearchEngine — FTS", () => {
     ).toEqual(["time/morning"]);
   });
 
+  it("date filters use the latest valid active source time and keep unknown dates unknown", async () => {
+    const addPage = async (slug: string, timestamp?: string) => {
+      const source = timestamp
+        ? [
+            "source:",
+            "  platform: test",
+            `  channel: ${slug}`,
+            `  timestamp: ${timestamp}`,
+            `  raw_hash: ${slug}`,
+            "  quote: evidence",
+          ]
+        : [];
+      const page = await pageStore.putPage(
+        slug,
+        ["---", `title: ${slug}`, "type: note", ...source, "---", "windowword evidence"].join("\n"),
+      );
+      await chunkStore.rechunk(page.id, page.compiled_truth);
+      return page;
+    };
+
+    await addPage("notes/source-missing");
+    await addPage("notes/source-partial", "2021-04");
+    const contributed = await addPage("notes/contributed", "2021-01-01T00:00:00.000Z");
+    await db.executor.query(
+      `INSERT INTO memory_contributions
+         (contribution_id, signal_family_key, canonical_page_id, session_ref, revision_id,
+          authority, signal_type, normalized_topic, signal, source_ref, active)
+       VALUES
+         ('old', 'old-family', $1, 'ref', 1, 'user_confirmed', 'knowledge', 'old', '{}'::jsonb,
+          '{"platform":"test","channel":"old","timestamp":"2021-01-01T00:00:00.000Z"}'::jsonb, true),
+         ('recent', 'recent-family', $1, 'ref', 1, 'assistant_claimed', 'knowledge', 'recent', '{}'::jsonb,
+          '{"platform":"test","channel":"recent","timestamp":"2026-09-03T00:00:00.000Z"}'::jsonb, true)`,
+      [contributed.id],
+    );
+
+    const filter = { from: "2026-09-01", to: "2026-09-06" };
+    await expect(search.search("windowword", filter)).resolves.toMatchObject([
+      { slug: "notes/contributed" },
+    ]);
+    await expect(search.query("windowword", filter)).resolves.toMatchObject([
+      { slug: "notes/contributed" },
+    ]);
+  });
+
   it("clamps oversized search and query limits", async () => {
     for (let i = 0; i < 55; i++) {
       const page = await pageStore.putPage(

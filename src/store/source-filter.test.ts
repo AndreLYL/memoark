@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Database } from "./database.js";
 import { PageStore } from "./pages.js";
 import { SearchEngine } from "./search.js";
+import { safeTimestampExpr } from "./source-filter.js";
 import { TimelineStore } from "./timeline.js";
 
 async function addContribution(
@@ -24,6 +25,37 @@ async function addContribution(
 }
 
 describe("source filtering via active contributions (spec §8, PR-4)", () => {
+  it("safeTimestampExpr accepts only exact ISO dates or zoned datetimes", async () => {
+    const db = await Database.create(undefined, { embeddingDimensions: 768 });
+    try {
+      const parse = async (value: string) =>
+        (
+          await db.executor.query<{ value: string | Date | null }>(
+            `SELECT ${safeTimestampExpr("$1::text")} AS value`,
+            [value],
+          )
+        ).rows[0].value;
+
+      expect(await parse("2026-09-03")).not.toBeNull();
+      expect(await parse("2026-09-03T12:34:56.789Z")).not.toBeNull();
+      expect(await parse("2026-09-03T21:34:56+09:00")).not.toBeNull();
+      for (const unsafe of [
+        "2021-04",
+        "2026-02-30",
+        "not-a-date",
+        "now",
+        "today",
+        "infinity",
+        "04/05/2026",
+        "2026-09-03T12:34:56",
+      ]) {
+        expect(await parse(unsafe), unsafe).toBeNull();
+      }
+    } finally {
+      await db.executor.close();
+    }
+  });
+
   it("finds a multi-source page by its NON-primary platform (search)", async () => {
     const db = await Database.create(undefined, { embeddingDimensions: 768 });
     try {

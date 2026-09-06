@@ -125,4 +125,46 @@ describe("synth/scope retrieve", () => {
     expect(slugs).toContain("notes/in-window");
     expect(slugs).not.toContain("notes/out-window");
   });
+
+  it("time scope uses the newest active contribution and excludes unknown source times", async () => {
+    const contributed = await pages.putPage(
+      "notes/multi-source",
+      [
+        "---",
+        "title: Multi Source",
+        "type: note",
+        "source:",
+        "  platform: test",
+        "  channel: old",
+        "  timestamp: 2021-01-01T00:00:00.000Z",
+        "---",
+        "Recently discussed historical note.",
+      ].join("\n"),
+    );
+    await pages.putPage(
+      "notes/unknown-time",
+      "---\ntitle: Unknown Time\ntype: note\n---\nNo source timestamp.",
+    );
+    await db.executor.query(
+      `INSERT INTO memory_contributions
+         (contribution_id, signal_family_key, canonical_page_id, session_ref, revision_id,
+          authority, signal_type, normalized_topic, signal, source_ref, active)
+       VALUES
+         ('scope-old', 'scope-old-family', $1, 'ref', 1, 'user_confirmed', 'knowledge', 'old', '{}'::jsonb,
+          '{"platform":"test","channel":"old","timestamp":"2021-01-01T00:00:00.000Z"}'::jsonb, true),
+         ('scope-recent', 'scope-recent-family', $1, 'ref', 1, 'assistant_claimed', 'knowledge', 'recent', '{}'::jsonb,
+          '{"platform":"test","channel":"recent","timestamp":"2026-09-03T00:00:00.000Z"}'::jsonb, true)`,
+      [contributed.id],
+    );
+
+    const candidates = await retrieve(
+      { time: { from: "2026-09-01", to: "2026-09-06" } },
+      {},
+      stores,
+    );
+
+    expect(candidates.map((candidate) => candidate.slug)).toEqual(["notes/multi-source"]);
+    expect(candidates[0].date).toBe("2026-09-03T00:00:00.000Z");
+    expect(candidates[0].source).toBe("recent");
+  });
 });

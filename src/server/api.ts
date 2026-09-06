@@ -6,6 +6,7 @@ import type { EmbeddingService } from "../store/embedding.js";
 import type { GraphStore } from "../store/graph.js";
 import type { PageStore } from "../store/pages.js";
 import type { SearchEngine } from "../store/search.js";
+import { latestActivitySourceExpr, latestActivityTimestampExpr } from "../store/source-filter.js";
 import type { TagStore } from "../store/tags.js";
 import type { TimelineStore } from "../store/timeline.js";
 import { createDefaultBackfillRoutes } from "./backfill-routes.js";
@@ -338,21 +339,23 @@ export function createApiApp(stores: StoreContext, apiOpts: ApiAppOpts = {}): Ho
     // active day older than the current page. Day volume is bounded by an
     // active-day LIMIT in SQL, so no lower bound is needed while paginating.
     const to = cursor ?? toParam ?? new Date().toISOString().slice(0, 10);
+    const activitySource = latestActivitySourceExpr("pages.id", "pages");
+    const activityTimestamp = latestActivityTimestampExpr("pages.id", "pages");
+    const activityTimestampText = `(${activitySource}->>'timestamp')`;
 
     const params: unknown[] = [to];
     const conditions: string[] = [
+      `${activityTimestamp} IS NOT NULL`,
       // Upper bound on the calendar day, compared as a UTC date-string prefix so
       // the filter matches how days are grouped (`LEFT(signal_time, 10)`) and how
       // the cursor is emitted. Casting `$1::date + interval` to timestamptz would
       // resolve midnight in the *session* timezone (PGlite inherits the process
       // TZ), silently dropping "today"'s signals for any east-of-UTC deployment.
-      `LEFT(COALESCE(frontmatter->'source'->>'timestamp', frontmatter->'first_seen'->>'timestamp', created_at::text), 10) <= $1`,
+      `LEFT(${activityTimestampText}, 10) <= $1`,
     ];
     if (fromParam) {
       params.push(fromParam);
-      conditions.push(
-        `COALESCE(frontmatter->'source'->>'timestamp', frontmatter->'first_seen'->>'timestamp', created_at::text)::timestamptz >= $${params.length}::timestamptz`,
-      );
+      conditions.push(`${activityTimestamp} >= $${params.length}::timestamptz`);
     }
 
     if (typeParam) {
@@ -367,28 +370,20 @@ export function createApiApp(stores: StoreContext, apiOpts: ApiAppOpts = {}): Ho
     }
     if (platformParam) {
       params.push(platformParam);
-      conditions.push(
-        `COALESCE(frontmatter->'source'->>'platform', frontmatter->'first_seen'->>'platform') = $${params.length}`,
-      );
+      conditions.push(`${activitySource}->>'platform' = $${params.length}`);
     }
 
     const sql = `
   WITH page_signals AS (
     SELECT slug, type, title,
            LEFT(compiled_truth, 200) AS snippet,
+           ${activityTimestampText} AS signal_time,
            COALESCE(
-             frontmatter->'source'->>'timestamp',
-             frontmatter->'first_seen'->>'timestamp',
-             created_at::text
-           ) AS signal_time,
-           COALESCE(
-             frontmatter->'source'->>'platform',
-             frontmatter->'first_seen'->>'platform',
+             ${activitySource}->>'platform',
              'manual'
            ) AS platform,
            COALESCE(
-             frontmatter->'source'->>'channel',
-             frontmatter->'first_seen'->>'channel',
+             ${activitySource}->>'channel',
              '—'
            ) AS channel
     FROM pages

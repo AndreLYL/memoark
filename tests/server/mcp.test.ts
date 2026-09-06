@@ -88,9 +88,10 @@ describe("MCP server", () => {
   describe("get_session_context", () => {
     it("returns markdown overview containing decisions, tasks, and preferences", async () => {
       const tools = createMcpToolHandlers(stores);
+      const recent = new Date(Date.now() - 86_400_000).toISOString();
       await tools.put_page({
         slug: "decisions/use-pglite",
-        content: "---\ntitle: Use PGLite\ntype: decision\n---\nChose PGLite for embedded DB.",
+        content: `---\ntitle: Use PGLite\ntype: decision\nsource:\n  platform: test\n  channel: decisions/use-pglite\n  timestamp: ${recent}\n---\nChose PGLite for embedded DB.`,
       });
       await tools.put_page({
         slug: "tasks/implement-spec3",

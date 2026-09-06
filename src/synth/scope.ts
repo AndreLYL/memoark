@@ -1,6 +1,6 @@
 import type { SourceRef } from "../core/types.js";
 import type { StoreContext } from "../server/api.js";
-import { primaryContribSourceExpr } from "../store/source-filter.js";
+import { latestActivitySourceExpr, safeTimestampExpr } from "../store/source-filter.js";
 import type { AssembledCandidate, SynthScope } from "./types.js";
 
 /** A retrieved candidate before ref numbering (assigned in context.assemble). */
@@ -146,15 +146,15 @@ async function retrieveByTime(
   stores: StoreContext,
 ): Promise<RawCandidate[]> {
   const time = scope.time as { from: string; to: string };
-  // Spec §8: derive the signal source/time from the primary ACTIVE contribution,
-  // falling back to the frontmatter primary (legacy pages) then created_at.
-  const primarySource = primaryContribSourceExpr("pages.id");
-  const signalTimeExpr = `COALESCE(${primarySource}->>'timestamp', frontmatter->'source'->>'timestamp', frontmatter->'first_seen'->>'timestamp', created_at::text)`;
-  const sourceExpr = `COALESCE(${primarySource}, frontmatter->'source', frontmatter->'first_seen')`;
+  // Time scopes describe evidence activity, not database ingestion time. Pick
+  // the newest valid active contribution, with a legacy-only frontmatter fallback.
+  const sourceExpr = latestActivitySourceExpr("pages.id", "pages");
+  const signalTimeExpr = `(${sourceExpr}->>'timestamp')`;
+  const safeSignalTime = safeTimestampExpr(signalTimeExpr);
   const params: unknown[] = [time.from, time.to];
   const conditions = [
-    `${signalTimeExpr}::timestamptz >= $1::timestamptz`,
-    `${signalTimeExpr}::timestamptz < ($2::date + interval '1 day')`,
+    `${safeSignalTime} >= $1::timestamptz`,
+    `${safeSignalTime} < ($2::date + interval '1 day')`,
   ];
   if (scope.types && scope.types.length > 0) {
     params.push(scope.types);
@@ -169,7 +169,7 @@ async function retrieveByTime(
        frontmatter->>'source_hash' AS source_hash
      FROM pages
      WHERE ${conditions.join(" AND ")}
-     ORDER BY signal_time DESC
+     ORDER BY ${safeSignalTime} DESC
      LIMIT $${params.length}`,
     params,
   );

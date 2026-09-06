@@ -47,3 +47,65 @@ export function primaryContribSourceExpr(pageIdExpr: string): string {
      LIMIT 1
   )`;
 }
+
+/**
+ * Cast free-form historical text only when PostgreSQL can prove it is a complete,
+ * valid timestamp. Both supported local engines run PostgreSQL 17 semantics.
+ * Partial dates such as `2021-04` deliberately remain unknown for exact windows.
+ */
+export function safeTimestampExpr(textExpr: string): string {
+  // PostgreSQL intentionally accepts convenient inputs such as `now`, `today`,
+  // `infinity`, and locale-shaped dates. Those are unsafe for persisted evidence:
+  // an old fuzzy value could otherwise become the current day at query time.
+  const exactIsoShape =
+    `(${textExpr}) ~ ` +
+    `'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01])$|` +
+    `^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01])T` +
+    `([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]+)?` +
+    `(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$'`;
+  return `(CASE
+    WHEN ${exactIsoShape} AND pg_input_is_valid(${textExpr}, 'timestamptz')
+      THEN (${textExpr})::timestamptz
+    ELSE NULL
+  END)`;
+}
+
+function validLegacySourceExpr(pageAlias: string): string {
+  const source = `${pageAlias}.frontmatter->'source'`;
+  const firstSeen = `${pageAlias}.frontmatter->'first_seen'`;
+  return `(CASE
+    WHEN ${safeTimestampExpr(`${source}->>'timestamp'`)} IS NOT NULL THEN ${source}
+    WHEN ${safeTimestampExpr(`${firstSeen}->>'timestamp'`)} IS NOT NULL THEN ${firstSeen}
+    ELSE NULL
+  END)`;
+}
+
+/**
+ * Return the source carrying a page's latest valid evidence/activity timestamp.
+ *
+ * Active contributions are authoritative for v2 pages. The frontmatter fallback
+ * is used only by legacy pages with no active contributions; if contributions
+ * exist but all their timestamps are unknown, the result stays unknown rather
+ * than borrowing an ingestion/materialization timestamp.
+ */
+export function latestActivitySourceExpr(pageIdExpr: string, pageAlias: string): string {
+  const active = `SELECT 1 FROM memory_contributions mc WHERE mc.canonical_page_id = ${pageIdExpr} AND mc.active`;
+  const validTimestamp = safeTimestampExpr("mc.source_ref->>'timestamp'");
+  return `(CASE
+    WHEN EXISTS (${active}) THEN (
+      SELECT mc.source_ref
+      FROM memory_contributions mc
+      WHERE mc.canonical_page_id = ${pageIdExpr}
+        AND mc.active
+        AND ${validTimestamp} IS NOT NULL
+      ORDER BY ${validTimestamp} DESC, mc.created_at DESC
+      LIMIT 1
+    )
+    ELSE ${validLegacySourceExpr(pageAlias)}
+  END)`;
+}
+
+/** Latest exact source/evidence time for date-window filtering. */
+export function latestActivityTimestampExpr(pageIdExpr: string, pageAlias: string): string {
+  return safeTimestampExpr(`(${latestActivitySourceExpr(pageIdExpr, pageAlias)})->>'timestamp'`);
+}
