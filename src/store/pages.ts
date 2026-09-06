@@ -3,6 +3,7 @@ import { parse as parseYaml } from "yaml";
 import type { SourceRef } from "../core/types.js";
 import { rechunkTx } from "./chunks.js";
 import { GraphStore } from "./graph.js";
+import { latestActivitySourceExpr, latestActivityTimestampExpr } from "./source-filter.js";
 import type { SqlConn, SqlExecutor } from "./sql-executor.js";
 import { parseWikiLinks } from "./wikilink.js";
 
@@ -20,6 +21,8 @@ export interface Page {
   consolidated_into: number | null;
   created_at: string;
   updated_at: string;
+  /** Exact source/evidence time, populated by signal-time listings. */
+  activity_time?: string | null;
 }
 
 export interface PutPageOptions {
@@ -55,6 +58,7 @@ interface PageRow {
   consolidated_into: number | null;
   created_at: string | Date;
   updated_at: string | Date;
+  activity_time?: string | Date | null;
 }
 
 /**
@@ -311,6 +315,8 @@ export class PageStore {
     limit?: number;
     sort?: string;
     order?: string;
+    /** Inclusive source/evidence lower bound; valid only with sort=signal_time. */
+    source_from?: string;
   }): Promise<Page[]> {
     const params: unknown[] = [];
     const conditions: string[] = [];
@@ -322,6 +328,15 @@ export class PageStore {
     if (opts?.exclude_types && opts.exclude_types.length > 0) {
       conditions.push(`type != ALL($${params.length + 1}::text[])`);
       params.push(opts.exclude_types);
+    }
+    if (opts?.source_from) {
+      if (opts.sort !== "signal_time") {
+        throw new Error("source_from requires sort=signal_time");
+      }
+      params.push(opts.source_from);
+      conditions.push(
+        `${latestActivityTimestampExpr("pages.id", "pages")} >= $${params.length}::timestamptz`,
+      );
     }
 
     const whereClause = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
@@ -335,12 +350,10 @@ export class PageStore {
         ) lc ON lc.to_page_id = p.id${whereClause}
         ORDER BY COALESCE(lc.cnt, 0) ${sortDir}`;
     } else if (opts?.sort === "signal_time") {
-      sql = `SELECT * FROM pages${whereClause}
-        ORDER BY COALESCE(
-          frontmatter->'source'->>'timestamp',
-          frontmatter->'first_seen'->>'timestamp',
-          created_at::text
-        ) ${sortDir}`;
+      const activitySource = latestActivitySourceExpr("pages.id", "pages");
+      const activityTime = latestActivityTimestampExpr("pages.id", "pages");
+      sql = `SELECT *, (${activitySource}->>'timestamp') AS activity_time FROM pages${whereClause}
+        ORDER BY ${activityTime} ${sortDir} NULLS LAST`;
     } else {
       const sortCol = ["updated_at", "created_at", "title"].includes(opts?.sort ?? "")
         ? (opts?.sort ?? "updated_at")
@@ -406,6 +419,11 @@ export class PageStore {
       consolidated_into: row.consolidated_into ?? null,
       created_at: toIsoTimestamp(row.created_at),
       updated_at: toIsoTimestamp(row.updated_at),
+      ...(row.activity_time !== undefined
+        ? {
+            activity_time: row.activity_time == null ? null : toIsoTimestamp(row.activity_time),
+          }
+        : {}),
     };
   }
 }

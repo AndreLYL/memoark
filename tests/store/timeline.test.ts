@@ -112,6 +112,26 @@ describe("TimelineStore", () => {
     ]);
   });
 
+  it("feed skips historical partial and invalid dates instead of aborting a date window", async () => {
+    await pages.putPage("test/historical-dates", "---\ntitle: Historical\ntype: test\n---\nBody.");
+    await timeline.addEntry("test/historical-dates", {
+      date: "2021-04",
+      summary: "Known month but unknown day",
+    });
+    await timeline.addEntry("test/historical-dates", {
+      date: "not-a-date",
+      summary: "Malformed legacy date",
+    });
+    await timeline.addEntry("test/historical-dates", {
+      date: "2026-09-03",
+      summary: "Exact recent event",
+    });
+
+    await expect(timeline.feed({ from: "2026-09-01", to: "2026-09-06" })).resolves.toMatchObject([
+      { summary: "Exact recent event" },
+    ]);
+  });
+
   it("getTimeline returns empty for page with no entries", async () => {
     await pages.putPage("test/empty", "---\ntitle: E\ntype: test\n---\nBody.");
     const entries = await timeline.getTimeline("test/empty");

@@ -130,4 +130,27 @@ describe("/api/timeline/feed — channel_name + channel_name_status", () => {
     expect(mail?.channel_name_status).toBe("mail");
     await db.executor.close();
   });
+
+  it("skips partial and missing source times instead of casting or treating ingestion as activity", async () => {
+    const { app, db } = await setupAppWithChannelData();
+    await db.executor.query(
+      `INSERT INTO pages (slug, type, title, compiled_truth, frontmatter)
+       VALUES
+         ('partial-time', 'note', 'Partial', 'body',
+          '{"source":{"platform":"test","channel":"partial","timestamp":"2021-04"}}'::jsonb),
+         ('missing-time', 'note', 'Missing', 'body', '{}'::jsonb)`,
+    );
+
+    const res = await app.request("/api/timeline/feed?from=2026-09-01&to=2099-12-31");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as TimelineFeedResponse;
+    const slugs = body.days.flatMap((day) =>
+      day.groups.flatMap((group) =>
+        (group.signals as Array<{ slug?: string }>).map((signal) => signal.slug),
+      ),
+    );
+    expect(slugs).not.toContain("partial-time");
+    expect(slugs).not.toContain("missing-time");
+    await db.executor.close();
+  });
 });

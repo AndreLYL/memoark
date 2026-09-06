@@ -1,7 +1,11 @@
 import type { MemoryFilter, SourceRef } from "../core/types.js";
 import type { LLMProvider } from "../extractors/providers/types.js";
 import { rewriteQuery } from "./query-rewrite.js";
-import { sourceFilterCondition } from "./source-filter.js";
+import {
+  latestActivitySourceExpr,
+  latestActivityTimestampExpr,
+  sourceFilterCondition,
+} from "./source-filter.js";
 import type { SqlConn } from "./sql-executor.js";
 import { buildSnippet, buildTrgmConditions, splitTerms } from "./trgm-search.js";
 
@@ -189,7 +193,7 @@ function addMemoryFilterConditions(
   if (opts?.from) {
     params.push(opts.from);
     conditions.push(
-      `COALESCE(${sourceField(pageAlias, "timestamp")}, ${pageAlias}.created_at::text)::timestamptz >= $${params.length}::timestamptz`,
+      `${latestActivityTimestampExpr(pageId, pageAlias)} >= $${params.length}::timestamptz`,
     );
   }
 
@@ -197,14 +201,20 @@ function addMemoryFilterConditions(
     params.push(opts.to);
     if (isDateOnly(opts.to)) {
       conditions.push(
-        `COALESCE(${sourceField(pageAlias, "timestamp")}, ${pageAlias}.created_at::text)::timestamptz < ($${params.length}::date + interval '1 day')`,
+        `${latestActivityTimestampExpr(pageId, pageAlias)} < ($${params.length}::date + interval '1 day')`,
       );
     } else {
       conditions.push(
-        `COALESCE(${sourceField(pageAlias, "timestamp")}, ${pageAlias}.created_at::text)::timestamptz <= $${params.length}::timestamptz`,
+        `${latestActivityTimestampExpr(pageId, pageAlias)} <= $${params.length}::timestamptz`,
       );
     }
   }
+}
+
+function resultSourceJson(alias: string, opts: SearchFilterOpts | undefined): string {
+  return opts?.from || opts?.to
+    ? latestActivitySourceExpr(`${alias}.id`, alias)
+    : sourceJson(alias);
 }
 
 function parseProvenance(value: SourceRef | string | null): SourceRef | undefined {
@@ -279,7 +289,7 @@ export class SearchEngine {
          p.type,
          GREATEST(similarity(p.title, $1), similarity(p.compiled_truth, $1)) AS page_rank,
          p.compiled_truth AS body,
-         ${sourceJson("p")} AS provenance
+         ${resultSourceJson("p", opts)} AS provenance
        FROM pages p
        WHERE ${conditions.join(" AND ")}
        ORDER BY page_rank DESC, p.updated_at DESC, p.slug ASC
@@ -463,7 +473,7 @@ export class SearchEngine {
       `SELECT p.slug, p.title, p.type, cc.chunk_source, p.updated_at,
          similarity(cc.chunk_text, $1) AS chunk_rank,
          cc.chunk_text AS chunk_text,
-         ${sourceJson("p")} AS provenance
+         ${resultSourceJson("p", opts)} AS provenance
        FROM content_chunks cc JOIN pages p ON p.id = cc.page_id
        WHERE ${conditions.join(" AND ")}
        ORDER BY chunk_rank DESC, p.updated_at DESC NULLS LAST, p.slug ASC
@@ -506,7 +516,7 @@ export class SearchEngine {
     const result = await this.pg.query<ChunkSearchRow>(
       `SELECT p.slug, p.title, p.type, cc.chunk_source, p.updated_at,
          cc.chunk_text AS snippet, 1 - (cc.embedding <=> $1::vector) AS cosine_sim,
-         ${sourceJson("p")} AS provenance
+         ${resultSourceJson("p", opts)} AS provenance
        FROM content_chunks cc JOIN pages p ON p.id = cc.page_id
        WHERE ${conditions.join(" AND ")}
        ORDER BY cc.embedding <=> $1::vector LIMIT $${params.length}`,

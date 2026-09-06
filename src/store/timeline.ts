@@ -1,6 +1,6 @@
 import { compactSourceRef } from "../core/source-ref.js";
 import type { MemoryFilter, SourceRef } from "../core/types.js";
-import { sourceFilterCondition } from "./source-filter.js";
+import { safeTimestampExpr, sourceFilterCondition } from "./source-filter.js";
 import type { SqlConn } from "./sql-executor.js";
 
 export interface TimelineEntry {
@@ -168,15 +168,17 @@ function addFeedFilters(
 
   if (opts?.from) {
     params.push(opts.from);
-    conditions.push(`te.date::timestamptz >= $${params.length}::timestamptz`);
+    conditions.push(`${safeTimestampExpr("te.date")} >= $${params.length}::timestamptz`);
   }
 
   if (opts?.to) {
     params.push(opts.to);
     if (isDateOnly(opts.to)) {
-      conditions.push(`te.date::timestamptz < ($${params.length}::date + interval '1 day')`);
+      conditions.push(
+        `${safeTimestampExpr("te.date")} < ($${params.length}::date + interval '1 day')`,
+      );
     } else {
-      conditions.push(`te.date::timestamptz <= $${params.length}::timestamptz`);
+      conditions.push(`${safeTimestampExpr("te.date")} <= $${params.length}::timestamptz`);
     }
   }
 }
